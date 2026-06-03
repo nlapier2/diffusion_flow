@@ -138,19 +138,22 @@ def train_and_plot():
     model = ToyDDPM(TimeConditionedMLP()).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     
-    epochs = 1001
+    epochs = 201
     print("Starting training...")
     
     # Training Loop
     for epoch in range(epochs):
-        for batch in dataloader:
-            optimizer.zero_grad()
-            loss = model.compute_loss(batch)
-            loss.backward()
-            optimizer.step()
-            
-        if epoch % 100 == 0:
-            print(f"Epoch {epoch} | Loss: {loss.item():.4f}")
+            epoch_loss = 0.0
+            for batch in dataloader:
+                optimizer.zero_grad()
+                loss = model.compute_loss(batch)
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+                
+            avg_loss = epoch_loss / len(dataloader)
+            if epoch % 50 == 0:
+                print(f"Epoch {epoch} | Avg Loss: {avg_loss:.4f}")
 
     # Evaluation & Plotting
     print("Sampling from model...")
