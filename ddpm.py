@@ -55,18 +55,23 @@ class ToyDDPM(nn.Module):
 
     def q_sample(self, x_0, t, noise):
         """
-        TODO 1: The Forward Process
+        [DONE] 1: The Forward Process
         Implement the forward perturbation kernel q(x_t | x_0).
         Calculate x_t given x_0, the timestep t, and the injected Gaussian noise.
         Hint: You'll need self.alphas_bar[t].
         """
-        # x_t = ???
-        raise NotImplementedError("Implement the forward sampling equation.")
+        # Unsqueeze to reshape from [batch_size] to [batch_size, 1]
+        # Here x_0 and noise have size [batch_size, 2], since here we have 2-d swiss roll data
+        # The unsqueeze allows pytorch to broadcast the multiplication across dimensions,
+        #   which it does when the rightmost dimension is 1
+        sqrt_abar = torch.sqrt(self.alphas_bar[t]).unsqueeze(-1)
+        sqrt_1m_abar = torch.sqrt(1 - self.alphas_bar[t]).unsqueeze(-1)
+        x_t = sqrt_abar * x_0 + sqrt_1m_abar * noise
         return x_t
 
     def compute_loss(self, x_0):
         """
-        TODO 2: The Objective Function
+        [DONE] 2: The Objective Function
         1. Sample random timesteps 't' for the batch.
         2. Generate standard Gaussian noise.
         3. Get x_t using your q_sample function.
@@ -74,14 +79,18 @@ class ToyDDPM(nn.Module):
         5. Return the Mean Squared Error between the true noise and predicted noise.
         """
         batch_size = x_0.shape[0]
-        # loss = ???
-        raise NotImplementedError("Implement the training objective.")
+        t = torch.randint(0, self.n_steps, size=(batch_size,), device=x_0.device, dtype=torch.long)
+        noise = torch.randn_like(x_0)  # standard Gaussian, same size as x_0
+        x_t = self.q_sample(x_0, t, noise)
+        pred_noise = self.network(x_t, t)  # predict noise using neural network
+        loss = nn.functional.mse_loss(pred_noise, noise)
+
         return loss
 
     @torch.no_grad()
     def sample(self, n_samples):
         """
-        TODO 3: The Reverse Process (Generation)
+        [DONE] 3: The Reverse Process (Generation)
         Start from pure noise x_T, and iteratively denoise to x_0.
         Use the network to predict the noise at each step, and apply the reverse 
         Langevin dynamics update rule to step from x_t to x_{t-1}.
@@ -91,12 +100,27 @@ class ToyDDPM(nn.Module):
         for i in reversed(range(self.n_steps)):
             t = torch.full((n_samples,), i, device=self.betas.device, dtype=torch.long)
             
-            # predicted_noise = self.network(x_t, t)
-            # x_t = ??? (Update x_t to x_{t-1} using predicted noise and the schedule)
+            # Predict noise
+            predicted_noise = self.network(x_t, t)
+
+            # Compute constants
+            alpha_t = 1.0 - self.betas[t]
+            sqrt_alpha_t = torch.sqrt(alpha_t).unsqueeze(-1)
+            sqrt_abar = torch.sqrt(self.alphas_bar[t]).unsqueeze(-1)
+            sqrt_1m_abar = torch.sqrt(1 - self.alphas_bar[t]).unsqueeze(-1)
+            beta_div_abar = self.betas[t].unsqueeze(-1) / sqrt_1m_abar
+
+            # Compute deterministic model mean (without added noise)
+            model_mean = (1 / sqrt_alpha_t) * (x_t - beta_div_abar * predicted_noise)
+
+            # Add stochastic noise (Langevin dynamics), unless it's the final step
+            if i > 0:
+                z = torch.randn_like(x_t)  # Independent noise for each dimension
+                sigma_t = torch.sqrt(self.betas[t]).unsqueeze(-1) # Standard deviation
+                x_t = model_mean + sigma_t * z
+            else:
+                x_t = model_mean
             
-            pass # Remove this pass once implemented
-            
-        raise NotImplementedError("Implement the reverse denoising loop.")
         return x_t
 
 # ==========================================
@@ -105,6 +129,7 @@ class ToyDDPM(nn.Module):
 
 def train_and_plot():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print('Device: ', device)
     
     # Setup
     dataset = get_swiss_roll().to(device)
@@ -113,7 +138,7 @@ def train_and_plot():
     model = ToyDDPM(TimeConditionedMLP()).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     
-    epochs = 1000
+    epochs = 1001
     print("Starting training...")
     
     # Training Loop
@@ -140,10 +165,9 @@ def train_and_plot():
     plt.subplot(1, 2, 2)
     plt.scatter(samples[:, 0], samples[:, 1], s=5, alpha=0.5, c='red')
     plt.title("DDPM Generated")
-    plt.show()
+    # plt.show()
+    plt.savefig('images/swiss_rolls.png')
 
 if __name__ == "__main__":
-    # Uncomment to run once TODOs are filled
-    # train_and_plot()
+    train_and_plot()
     pass
-
