@@ -123,6 +123,55 @@ class ToyDDPM(nn.Module):
             
         return x_t
 
+    @torch.no_grad()
+    def sample_ddim(self, n_samples, ddim_steps=20):
+        """
+        Samples using the deterministic DDIM ODE, skipping steps for speed.
+        """
+        # Create a linear sub-sequence of timesteps
+        # e.g., if n_steps=100 and ddim_steps=20, this creates [95, 90, 85, ..., 0]
+        timesteps = torch.linspace(self.n_steps - 1, 0, ddim_steps).long().to(self.betas.device)
+        
+        x_t = torch.randn((n_samples, 2), device=self.betas.device)
+        
+        for i in range(ddim_steps):
+            # Current timestep in the subsequence (tau_i)
+            t_val = timesteps[i]
+            t = torch.full((n_samples,), t_val, device=self.betas.device, dtype=torch.long)
+            
+            # Previous timestep in the subsequence (tau_{i-1}), or 0 if at the end
+            prev_t_val = timesteps[i + 1] if i < ddim_steps - 1 else torch.tensor(0)
+            prev_t = torch.full((n_samples,), prev_t_val, device=self.betas.device, dtype=torch.long)
+            
+            # Predict the noise for the current step
+            predicted_noise = self.network(x_t, t)
+            
+            """
+            TODO: The DDIM Update Step
+            1. Extract alpha_bar_t (for 't') and alpha_bar_prev (for 'prev_t').
+               (Remember to unsqueeze to [batch_size, 1] to allow broadcasting).
+            2. Calculate the "Predicted x_0" term using x_t, noise, and alpha_bar_t.
+            3. Calculate the "Direction" term using the noise and alpha_bar_prev.
+            4. Combine them to calculate the new x_t (which is x_{tau_{i-1}}).
+            """
+
+            # Precompute constants
+            sqrt_abar = torch.sqrt(self.alphas_bar[t]).unsqueeze(-1)
+            sqrt_1m_abar = torch.sqrt(1 - self.alphas_bar[t]).unsqueeze(-1)
+            sqrt_abar_prev = torch.sqrt(self.alphas_bar[prev_t]).unsqueeze(-1)
+            sqrt_1m_abar_prev = torch.sqrt(1 - self.alphas_bar[prev_t]).unsqueeze(-1)
+
+            # Compute predicted x_0
+            pred_x0 = (x_t - sqrt_1m_abar * predicted_noise) / sqrt_abar
+
+            # Compute predicted direction pointing to the new x_t, x_{tau_{i-1}}
+            direction = sqrt_1m_abar_prev * predicted_noise
+
+            # Compute new DDIM-sampled x_t
+            x_t = sqrt_abar_prev * pred_x0 + direction
+            
+        return x_t
+
 # ==========================================
 # BOILERPLATE: Training Loop & Execution
 # ==========================================
@@ -158,6 +207,7 @@ def train_and_plot():
     # Evaluation & Plotting
     print("Sampling from model...")
     samples = model.sample(2000).cpu().numpy()
+    # samples = model.sample_ddim(2000).cpu().numpy()
     real_data = dataset[:2000].cpu().numpy()
 
     plt.figure(figsize=(10, 5))
